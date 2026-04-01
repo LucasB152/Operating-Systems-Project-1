@@ -61,11 +61,10 @@ size_t get_used_space(){
 
 // ------------------- END PROTECTED CODE -------------------
 
-static size_t round_up_pow2(size_t x)
+static inline size_t round_up_pow2(size_t x)
 {
     if (x <= 1) return 1;
-    if ((x & (x - 1)) == 0) return x; // Already a power of 2
-    return 1UL << (64 - __builtin_clzl(x)); // Round up to the next power of 2
+    return 1UL << (64 - __builtin_clzl(x - 1));
 }
 
 static void insert_free(int32_t node_idx, int level)
@@ -85,7 +84,7 @@ static void insert_free(int32_t node_idx, int level)
     if (prev_node != -1) {
         a.nodes[prev_node].next = node_idx;
     } else {
-        a.level_heads[level] = node_idx; // adjust the head of level
+        a.level_heads[level] = node_idx;
     }
 
     if (current != -1) {
@@ -113,11 +112,6 @@ static void remove_free(int32_t node_idx, int level)
 }
 
 void* balloc(size_t size) {
-
-    if (size == 0) {
-        size = 1;
-    }
-
     size_t alloc_size = round_up_pow2(size);
     if (alloc_size < a.min_size) {
         alloc_size = a.min_size;
@@ -126,29 +120,28 @@ void* balloc(size_t size) {
         return NULL;
     }
 
-    int l_target = __builtin_ctzll(a.total_size / alloc_size);
+    int level_target = __builtin_ctzll(a.total_size / alloc_size);
 
-    int l_found = -1;
-    for (int l = l_target; l >= 0; --l) {
-        if (a.level_heads[l] != -1) {
-            l_found = l;
+    int level_found = -1;
+    for (int level = level_target; level >= 0; --level) {
+        if (a.level_heads[level] != -1) {
+            level_found = level;
             break;
         }
     }
-    if (l_found == -1) {
+    if (level_found == -1) {
         return NULL;
     }
 
-    int32_t current = a.level_heads[l_found];
-    remove_free(current, l_found);
+    int32_t current = a.level_heads[level_found];
+    remove_free(current, level_found);
 
-    for (int level = l_found; level < l_target; ++level) {
+    for (int level = level_found; level < level_target; ++level) {
         a.nodes[current].status = NODE_SPLIT;
 
         int32_t left = 2 * current + 1;
         int32_t right = 2 * current + 2;
 
-        a.nodes[right].status = NODE_FREE;
         insert_free(right, level + 1);
 
         current = left;
@@ -156,11 +149,11 @@ void* balloc(size_t size) {
 
     a.nodes[current].status = NODE_USED;
 
-    size_t level_base = (1ULL << l_target) - 1ULL; // Node array index of the first block in the level
+    size_t level_base = (1ULL << level_target) - 1ULL; // Node array index of the first block in the level
     size_t k = (size_t)current - level_base; // Index of the block in the level
     size_t min_idx = k * (alloc_size / a.min_size); // Index of the minimal block after which the block start
 
-    a.allocated_levels[min_idx] = (uint8_t)l_target;
+    a.allocated_levels[min_idx] = (uint8_t)level_target;
     a.used_space += alloc_size;
 
     return (void *)((char *)a.base + min_idx * a.min_size);
@@ -226,7 +219,7 @@ static int init_structures(const void* memory_base, size_t size){
     }
 
     for (int32_t i = 0; i < (int32_t)(2 * N - 1); ++i)  {
-        a.nodes[i].status = NODE_FREE; //TODO: think about removing tis from here
+        a.nodes[i].status = NODE_FREE;
         a.nodes[i].prev = -1;
         a.nodes[i].next = -1;
     }
@@ -235,7 +228,6 @@ static int init_structures(const void* memory_base, size_t size){
         a.level_heads[level] = -1;
     }
 
-    a.nodes[0].status = NODE_FREE;
     a.level_heads[0] = 0;
 
     return 0;
